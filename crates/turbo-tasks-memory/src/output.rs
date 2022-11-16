@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
+    mem::take,
 };
 
 use anyhow::{anyhow, Error, Result};
@@ -96,7 +97,7 @@ impl Output {
         self.updates += 1;
         // notify
         if !self.dependent_tasks.is_empty() {
-            turbo_tasks.schedule_notify_tasks_set(&self.dependent_tasks);
+            turbo_tasks.schedule_notify_tasks_set(&take(&mut self.dependent_tasks));
         }
     }
 
@@ -109,13 +110,20 @@ impl Output {
         self.updates += 1;
         // notify
         if !self.dependent_tasks.is_empty() {
-            turbo_tasks.schedule_notify_tasks_set(&self.dependent_tasks);
+            turbo_tasks.schedule_notify_tasks_set(&take(&mut self.dependent_tasks));
         }
     }
 
     pub fn assign(&mut self, content: OutputContent, turbo_tasks: &dyn TurboTasksBackendApi) {
         self.content = content;
         self.updates += 1;
+        // notify
+        if !self.dependent_tasks.is_empty() {
+            turbo_tasks.schedule_notify_tasks_set(&take(&mut self.dependent_tasks));
+        }
+    }
+
+    pub fn gc_drop(self, turbo_tasks: &dyn TurboTasksBackendApi) {
         // notify
         if !self.dependent_tasks.is_empty() {
             turbo_tasks.schedule_notify_tasks_set(&self.dependent_tasks);

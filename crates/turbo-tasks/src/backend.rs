@@ -111,7 +111,7 @@ pub struct TaskExecutionSpec {
 
 // TODO technically CellContent is already indexed by the ValueTypeId, so we
 // don't need to store it here
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CellContent(pub Option<SharedReference>);
 
 impl Display for CellContent {
@@ -159,6 +159,8 @@ pub trait Backend: Sync + Send {
     #[allow(unused_variables)]
     fn stop(&self, turbo_tasks: &dyn TurboTasksBackendApi) {}
 
+    #[allow(unused_variables)]
+    fn idle_start(&self, turbo_tasks: &dyn TurboTasksBackendApi) {}
     fn invalidate_task(
         &self,
         task: TaskId,

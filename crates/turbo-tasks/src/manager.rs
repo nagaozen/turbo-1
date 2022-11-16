@@ -441,6 +441,7 @@ impl<B: Backend> TurboTasks<B> {
             .fetch_sub(1, Ordering::AcqRel)
             == 1
         {
+            self.backend.idle_start(self);
             // That's not super race-condition-safe, but it's only for
             // statistical reasons
             let total = self.scheduled_tasks.load(Ordering::Acquire);

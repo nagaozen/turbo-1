@@ -1,10 +1,17 @@
 use std::{
-    borrow::Cow, cell::RefCell, collections::VecDeque, future::Future, hash::BuildHasherDefault,
-    pin::Pin, time::Duration,
+    borrow::Cow,
+    cell::RefCell,
+    cmp::min,
+    collections::{hash_map, HashMap, VecDeque},
+    future::Future,
+    hash::BuildHasherDefault,
+    pin::Pin,
+    time::{Duration, Instant},
 };
 
 use anyhow::{bail, Result};
 use auto_hash_map::AutoSet;
+use concurrent_queue::ConcurrentQueue;
 use dashmap::{mapref::entry::Entry, DashMap};
 use rustc_hash::FxHasher;
 use tokio::task::futures::TaskLocalFuture;
@@ -19,6 +26,8 @@ use turbo_tasks::{
 };
 
 use crate::{
+    cell::RecomputingCell,
+    gc::{GcAction, GcItem},
     output::Output,
     scope::{TaskScope, TaskScopeId},
     task::{
@@ -35,6 +44,7 @@ pub struct MemoryBackend {
     backend_jobs: NoMoveVec<Job>,
     backend_job_id_factory: IdFactory<BackendJobId>,
     task_cache: DashMap<PersistentTaskType, TaskId, BuildHasherDefault<FxHasher>>,
+    gc_queue: ConcurrentQueue<TaskId>,
 }
 
 impl Default for MemoryBackend {
@@ -59,6 +69,7 @@ impl MemoryBackend {
             backend_jobs: NoMoveVec::new(),
             backend_job_id_factory: IdFactory::new(),
             task_cache: DashMap::default(),
+            gc_queue: ConcurrentQueue::unbounded(),
         }
     }
 
@@ -130,7 +141,7 @@ impl MemoryBackend {
                 scope.state.lock().increment_active(&mut queue)
             }) {
                 turbo_tasks.schedule_backend_foreground_job(
-                    self.create_backend_job(Job::ScheduleWhenDirty(tasks, reason)),
+                    self.create_backend_job(Job::ScheduleWhenDirtyFromScope(tasks, reason)),
                 );
             }
         }
@@ -157,7 +168,7 @@ impl MemoryBackend {
             scope.state.lock().increment_active_by(count, &mut queue)
         }) {
             turbo_tasks.schedule_backend_foreground_job(
-                self.create_backend_job(Job::ScheduleWhenDirty(tasks, reason)),
+                self.create_backend_job(Job::ScheduleWhenDirtyFromScope(tasks, reason)),
             );
         }
         self.increase_scope_active_queue(queue, reason, turbo_tasks);
@@ -184,9 +195,199 @@ impl MemoryBackend {
             });
         }
     }
+
+    fn add_task_to_gc(&self, task: TaskId) {
+        self.gc_queue.push(task).unwrap();
+    }
+
+    pub fn run_gc(&self, turbo_tasks: &dyn TurboTasksBackendApi) {
+        const MAX_TASKS_TO_CHECK: usize = 1000000;
+        const INCREMENT: usize = 100000;
+        const MAX_COLLECT_PERCENTAGE: usize = 30;
+        const MB: usize = 1024 * 1024;
+        #[cfg(not(debug_assertions))]
+        const GB: usize = 1024 * MB;
+
+        #[cfg(debug_assertions)]
+        const LOWER_MEM_TARGET: usize = 300 * MB;
+        #[cfg(debug_assertions)]
+        const UPPER_MEM_TARGET: usize = 1000 * MB;
+        #[cfg(debug_assertions)]
+        const MEM_LIMIT: usize = 2000 * MB;
+
+        #[cfg(not(debug_assertions))]
+        const LOWER_MEM_TARGET: usize = 3 * GB;
+        #[cfg(not(debug_assertions))]
+        const UPPER_MEM_TARGET: usize = 4 * GB;
+        #[cfg(not(debug_assertions))]
+        const MEM_LIMIT: usize = 8 * GB;
+
+        let usage = turbo_malloc::TurboMalloc::memory_usage();
+
+        if usage < UPPER_MEM_TARGET {
+            return;
+        }
+
+        let mut tasks = HashMap::with_capacity(INCREMENT);
+        let now = Instant::now();
+        let mut i = 0;
+        while tasks.len() < INCREMENT && i < MAX_TASKS_TO_CHECK {
+            if let Ok(id) = self.gc_queue.pop() {
+                i += 1;
+                if let Some(info) = self.with_task(id, |task| task.gc_info(now, self)) {
+                    tasks.insert(id, info);
+                } else {
+                    // Put task back into the queue
+                    let _ = self.gc_queue.push(id);
+                }
+            } else {
+                break;
+            }
+        }
+        let mut compute_duration_map = HashMap::new();
+        for (id, info) in tasks.iter() {
+            compute_duration_map.insert(*id, info.compute_duration);
+        }
+
+        let mut items = Vec::new();
+        for (&id, info) in tasks.iter_mut() {
+            let mut all_tasks = HashMap::new();
+            if info.unread_cells > 0 {
+                items.push(GcItem {
+                    action: GcAction::UnreadCells(id),
+                    compute_duration: info.compute_duration,
+                    age: info.age,
+                });
+            }
+            for (i, tasks) in info.cells.drain(..) {
+                items.push(GcItem {
+                    action: GcAction::ReadCell(id, i),
+                    compute_duration: info.compute_duration
+                        + tasks
+                            .into_iter()
+                            .map(|id| match all_tasks.entry(id) {
+                                hash_map::Entry::Occupied(e) => *e.get(),
+                                hash_map::Entry::Vacant(e) => {
+                                    *e.insert(*compute_duration_map.entry(id).or_insert_with(
+                                        || self.with_task(id, |task| task.gc_compute_duration()),
+                                    ))
+                                }
+                            })
+                            .sum(),
+                    age: info.age,
+                });
+            }
+            info.output.drain(..).for_each(|id| {
+                if let hash_map::Entry::Vacant(e) = all_tasks.entry(id) {
+                    let duration = *compute_duration_map
+                        .entry(id)
+                        .or_insert_with(|| self.with_task(id, |task| task.gc_compute_duration()));
+                    e.insert(duration);
+                }
+            });
+            if !info.active {
+                items.push(GcItem {
+                    action: GcAction::Unload(id),
+                    compute_duration: info.compute_duration + all_tasks.into_values().sum(),
+                    age: info.age,
+                });
+            }
+        }
+        items.sort_by(GcItem::cmp_priority);
+        let len = items.len();
+        let collect_count =
+            len * min(
+                MAX_COLLECT_PERCENTAGE,
+                (usage - LOWER_MEM_TARGET) * MAX_COLLECT_PERCENTAGE
+                    / (MEM_LIMIT - LOWER_MEM_TARGET),
+            ) / 100;
+        items.truncate(collect_count);
+        let collect_count = items.len();
+
+        let mut collected_tasks = 0;
+        if !items.is_empty() {
+            items.sort_by(GcItem::cmp_task);
+            let mut current_task = items[0].task();
+            let mut current_unload = false;
+            let mut current_unread = false;
+            let mut current_cells = Vec::new();
+            macro_rules! gc_current {
+                () => {
+                    self.with_task(current_task, |task| {
+                        if current_unload {
+                            if task.unload(self, turbo_tasks) {
+                                return;
+                            }
+                        }
+                        task.gc(current_unread, current_cells);
+                    });
+                };
+            }
+            for item in items {
+                if item.task() != current_task {
+                    collected_tasks += 1;
+                    gc_current!();
+                    current_task = item.task();
+                    current_unread = false;
+                    current_unload = false;
+                    current_cells = Vec::new();
+                }
+                match item.action {
+                    GcAction::UnreadCells(_) => current_unread = true,
+                    GcAction::ReadCell(_, i) => current_cells.push(i),
+                    GcAction::Unload(_) => current_unload = true,
+                }
+            }
+            collected_tasks += 1;
+            gc_current!();
+        }
+        let inspected_task_count = tasks.len();
+        for (id, _) in tasks {
+            let _ = self.gc_queue.push(id);
+        }
+
+        turbo_malloc::TurboMalloc::collect();
+        let new_usage = turbo_malloc::TurboMalloc::memory_usage();
+        println!(
+            "GC collected {}/{} items of {}/{} tasks  {:.3} GB -> {:.3} GB ({} tasks in queue)",
+            collect_count,
+            len,
+            collected_tasks,
+            inspected_task_count,
+            (usage / 1000_000) as f32 / 1000.0,
+            (new_usage / 1000_000) as f32 / 1000.0,
+            self.gc_queue.len()
+        );
+
+        // println!(
+        //     "memory_tasks: {} entries capacity {} kB",
+        //     self.memory_tasks.capacity(),
+        //     std::mem::size_of::<Task>() * self.memory_tasks.capacity() / 1024
+        // );
+        // println!(
+        //     "memory_task_scopes: {} entries capacity {} kB",
+        //     self.memory_task_scopes.capacity(),
+        //     std::mem::size_of::<TaskScope>() * self.memory_task_scopes.capacity() /
+        // 1024 );
+        // println!(
+        //     "backend_jobs: {} entries capacity {} kB",
+        //     self.backend_jobs.capacity(),
+        //     std::mem::size_of::<Job>() * self.backend_jobs.capacity() / 1024
+        // );
+
+        // if inspected_task_count > 0 {
+        let job = self.create_backend_job(Job::GarbaggeCollection);
+        turbo_tasks.schedule_backend_background_job(job);
+        // }
+    }
 }
 
 impl Backend for MemoryBackend {
+    fn idle_start(&self, turbo_tasks: &dyn TurboTasksBackendApi) {
+        // let job = self.create_backend_job(Job::GarbaggeCollection);
+        // turbo_tasks.schedule_backend_background_job(job);
+    }
+
     fn invalidate_task(
         &self,
         task: TaskId,
@@ -252,11 +453,11 @@ impl Backend for MemoryBackend {
 
     fn task_execution_completed(
         &self,
-        task: TaskId,
+        task_id: TaskId,
         duration: Duration,
         turbo_tasks: &dyn TurboTasksBackendApi,
     ) -> bool {
-        self.with_task(task, |task| {
+        self.with_task(task_id, |task| {
             task.execution_completed(duration, self, turbo_tasks)
         })
     }
@@ -316,32 +517,75 @@ impl Backend for MemoryBackend {
 
     fn try_read_task_cell(
         &self,
-        task: TaskId,
+        task_id: TaskId,
         index: CellId,
         reader: TaskId,
-        _turbo_tasks: &dyn TurboTasksBackendApi,
+        turbo_tasks: &dyn TurboTasksBackendApi,
     ) -> Result<Result<CellContent, EventListener>> {
-        if task == reader {
-            Ok(Ok(self.with_task(task, |task| {
-                task.with_cell_mut(index, |cell| cell.read_content_untracked())
+        if task_id == reader {
+            Ok(Ok(self.with_task(task_id, |task| {
+                task.with_cell(index, |cell| cell.read_own_content_untracked())
             })))
         } else {
-            Task::add_dependency_to_current(TaskDependency::TaskCell(task, index));
-            Ok(Ok(self.with_task(task, |task| {
-                task.with_cell_mut(index, |cell| cell.read_content(reader))
-            })))
+            Task::add_dependency_to_current(TaskDependency::TaskCell(task_id, index));
+            self.with_task(task_id, |task| {
+                match task.with_cell_mut(index, |cell| {
+                    cell.read_content(
+                        reader,
+                        move || format!("{task_id} {index}"),
+                        move || format!("reading {} {} from {}", task_id, index, reader),
+                    )
+                }) {
+                    Ok(content) => Ok(Ok(content)),
+                    Err(RecomputingCell { listener, schedule }) => {
+                        if schedule {
+                            task.invalidate(
+                                "need garbagged collected data again",
+                                self,
+                                turbo_tasks,
+                            );
+                        }
+                        Ok(Err(listener))
+                    }
+                }
+            })
         }
+    }
+
+    fn try_read_own_task_cell_untracked(
+        &self,
+        current_task: TaskId,
+        index: CellId,
+        _turbo_tasks: &dyn TurboTasksBackendApi,
+    ) -> Result<CellContent> {
+        Ok(self.with_task(current_task, |task| {
+            task.with_cell(index, |cell| cell.read_own_content_untracked())
+        }))
     }
 
     fn try_read_task_cell_untracked(
         &self,
-        task: TaskId,
+        task_id: TaskId,
         index: CellId,
-        _turbo_tasks: &dyn TurboTasksBackendApi,
+        turbo_tasks: &dyn TurboTasksBackendApi,
     ) -> Result<Result<CellContent, EventListener>> {
-        Ok(Ok(self.with_task(task, |task| {
-            task.with_cell(index, |cell| cell.read_content_untracked())
-        })))
+        self.with_task(task_id, |task| {
+            match task.with_cell_mut(index, |cell| {
+                cell.read_content_untracked(
+                    move || format!("{task_id}"),
+                    move || format!("reading {} {} untracked", task_id, index),
+                )
+            }) {
+                Ok(content) => Ok(Ok(content)),
+                Err(RecomputingCell { listener, schedule }) => {
+                    println!("recomputing cell {task_id} {index} untracked");
+                    if schedule {
+                        task.invalidate("need garbagged collected data again", self, turbo_tasks);
+                    }
+                    Ok(Err(listener))
+                }
+            }
+        })
     }
 
     fn track_read_task_cell(
@@ -461,11 +705,11 @@ impl Backend for MemoryBackend {
             unsafe {
                 self.memory_tasks.insert(*id, task);
             }
-            let result_task = match self.task_cache.entry(task_type) {
+            let (result_task, new) = match self.task_cache.entry(task_type) {
                 Entry::Vacant(entry) => {
                     // This is the most likely case
                     entry.insert(id);
-                    id
+                    (id, true)
                 }
                 Entry::Occupied(entry) => {
                     // Safety: We have a fresh task id that nobody knows about yet
@@ -473,10 +717,13 @@ impl Backend for MemoryBackend {
                         self.memory_tasks.remove(*id);
                         turbo_tasks.reuse_task_id(id);
                     }
-                    *entry.get()
+                    (*entry.get(), false)
                 }
             };
             self.connect_task_child(parent_task, result_task, reason, turbo_tasks);
+            if new {
+                self.add_task_to_gc(result_task);
+            }
             result_task
         };
         result
@@ -510,13 +757,14 @@ impl Backend for MemoryBackend {
 pub(crate) enum Job {
     RemoveFromScopes(AutoSet<TaskId>, Vec<TaskScopeId>),
     RemoveFromScope(AutoSet<TaskId>, TaskScopeId),
-    ScheduleWhenDirty(Vec<TaskId>, &'static str),
+    ScheduleWhenDirtyFromScope(Vec<TaskId>, &'static str),
     /// Add tasks from a scope. Scheduled by `run_add_from_scope_queue` to
     /// split off work.
     AddToScopeQueue(VecDeque<(TaskId, usize)>, TaskScopeId, bool, &'static str),
     /// Remove tasks from a scope. Scheduled by `run_remove_from_scope_queue` to
     /// split off work.
     RemoveFromScopeQueue(VecDeque<TaskId>, TaskScopeId),
+    GarbaggeCollection,
 }
 
 impl Job {
@@ -536,10 +784,10 @@ impl Job {
                     });
                 }
             }
-            Job::ScheduleWhenDirty(tasks, reason) => {
+            Job::ScheduleWhenDirtyFromScope(tasks, reason) => {
                 for task in tasks.into_iter() {
                     backend.with_task(task, |task| {
-                        task.schedule_when_dirty(reason, turbo_tasks);
+                        task.schedule_when_dirty_from_scope(reason, backend, turbo_tasks);
                     })
                 }
             }
@@ -555,6 +803,9 @@ impl Job {
             }
             Job::RemoveFromScopeQueue(queue, id) => {
                 run_remove_from_scope_queue(queue, id, backend, turbo_tasks);
+            }
+            Job::GarbaggeCollection => {
+                backend.run_gc(turbo_tasks);
             }
         }
     }

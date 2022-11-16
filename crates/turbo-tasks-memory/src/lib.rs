@@ -3,10 +3,12 @@
 #![feature(box_syntax)]
 #![feature(type_alias_impl_trait)]
 #![feature(lint_reasons)]
+#![feature(box_patterns)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod cell;
 mod count_hash_set;
+mod gc;
 mod map_guard;
 mod memory_backend;
 mod memory_backend_with_pg;

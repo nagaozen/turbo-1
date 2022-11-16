@@ -10,7 +10,9 @@ autobenches = false
 bench = false
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-mimalloc = { version = "0.1.30" }
+mimalloc = { version = "0.1.32", features = [] }
+libmimalloc-sys = { version = "0.1.28", default-features = false, features = ["extended"] }
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "aarch64")))'.dependencies]
-mimalloc = { version = "0.1.30", features = ["local_dynamic_tls"] }
+mimalloc = { version = "0.1.32", features = ["local_dynamic_tls"] }
+libmimalloc-sys = { version = "0.1.28", default-features = false, features = ["extended", "local_dynamic_tls"] }
