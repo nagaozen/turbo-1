@@ -59,7 +59,7 @@ impl Request {
             Request::Module {
                 module,
                 path: Pattern::Constant(path),
-                query: QueryMapVc,
+                query: _,
             } => format!("{module}{path}"),
             Request::ServerRelative {
                 path: Pattern::Constant(path),
