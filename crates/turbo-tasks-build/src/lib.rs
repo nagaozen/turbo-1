@@ -373,10 +373,11 @@ impl<'a> RegisterContext<'a> {
         let entry = self.values.get_mut(&key);
         if entry.is_none() {
             panic!(
-                "failed to add value trait {} to {} in {}",
+                "failed to add value trait {} to {} in {} {:?}",
                 trait_ident,
                 ident,
-                self.file_path.display()
+                self.file_path.display(),
+                key
             );
         }
         entry.unwrap().1.push(trait_ident.clone());

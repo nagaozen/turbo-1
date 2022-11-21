@@ -6,6 +6,7 @@ use super::request::{NextFontRequest, OneOrManyStrings};
 
 const ALLOWED_DISPLAY_VALUES: &[&str] = &["auto", "block", "swap", "fallback", "optional"];
 
+#[derive(Debug)]
 pub struct NextFontGoogleOptions {
     pub font_family: String,
     pub weights: FontWeights,
@@ -19,6 +20,7 @@ pub struct NextFontGoogleOptions {
     pub subsets: Option<Vec<String>>,
 }
 
+#[derive(Debug)]
 pub enum FontWeights {
     Variable,
     Fixed(IndexSet<String>),
