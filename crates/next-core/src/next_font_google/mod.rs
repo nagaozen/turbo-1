@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Context, Result};
-use indexmap::{IndexMap, IndexSet};
 use turbo_tasks_fs::{FileContent, FileSystemPathVc};
 use turbopack_core::{
     resolve::{
@@ -13,19 +12,17 @@ use turbopack_core::{
     virtual_asset::VirtualAssetVc,
 };
 
-use self::options::FontWeights;
 use crate::{
     embed_js::attached_next_js_package_path,
     next_font_google::{
-        options::{options_from_request, FontDataEntry},
+        options::{options_from_request, FontData},
         request::NextFontRequest,
     },
 };
 
 mod options;
 pub(crate) mod request;
-
-type FontData = IndexMap<String, FontDataEntry>;
+mod util;
 
 #[turbo_tasks::value(shared)]
 pub struct NextFontGoogleReplacer {
