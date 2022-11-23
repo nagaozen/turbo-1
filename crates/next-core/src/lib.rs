@@ -8,6 +8,7 @@ pub mod env;
 mod fallback;
 pub mod next_client;
 mod next_client_component;
+mod next_font_google;
 mod next_import_map;
 pub mod next_server;
 mod nodejs;
