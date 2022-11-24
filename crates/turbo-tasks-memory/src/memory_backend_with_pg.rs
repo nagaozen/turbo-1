@@ -303,7 +303,7 @@ impl<P: PersistedGraph> MemoryBackendWithPersistedGraph<P> {
                     task_state.scheduled = true;
                     #[cfg(feature = "log_scheduled_tasks")]
                     println!("schedule({task}) in ensure_task_in_memory");
-                    turbo_tasks.schedule(task);
+                    turbo_tasks.schedule(task, "TODO");
                 }
             } else {
                 task_state.memory = Some(MemoryTaskState::new(task, TaskFreshness::NeverExecuted));
@@ -407,7 +407,7 @@ impl<P: PersistedGraph> MemoryBackendWithPersistedGraph<P> {
                 state.scheduled = true;
                 #[cfg(feature = "log_scheduled_tasks")]
                 println!("schedule({task}) in activate_persisted");
-                turbo_tasks.schedule(task);
+                turbo_tasks.schedule(task, "TODO");
             }
             if (external || state.memory.is_some())
                 && state.persisted_to_mem_active != keeps_external_active
@@ -557,7 +557,7 @@ impl<P: PersistedGraph> MemoryBackendWithPersistedGraph<P> {
                     *scheduled = true;
                     #[cfg(feature = "log_scheduled_tasks")]
                     println!("schedule({task}) in activate_task_inner");
-                    turbo_tasks.schedule(task);
+                    turbo_tasks.schedule(task, "TODO");
                 }
                 for child in children.iter() {
                     self.try_increment_active_parents(
@@ -946,7 +946,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
             let (state, task_info) = self.state_mut(task, turbo_tasks);
             self.activate_task(task, state, task_info, turbo_tasks);
             // Activate would not schedule it since it's not in memory
-            turbo_tasks.schedule(task);
+            turbo_tasks.schedule(task, "TODO");
         }
         for task in tasks_to_activate {
             #[cfg(feature = "log_running_tasks")]
@@ -976,7 +976,12 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
         self.pg_stop(turbo_tasks);
     }
 
-    fn invalidate_task(&self, task: TaskId, turbo_tasks: &dyn TurboTasksBackendApi) {
+    fn invalidate_task(
+        &self,
+        task: TaskId,
+        _reason: &'static str,
+        turbo_tasks: &dyn TurboTasksBackendApi,
+    ) {
         let (mut state, _) = self.state_mut(task, turbo_tasks);
 
         if let Some(MemoryTaskState { freshness, .. }) = &mut state.memory {
@@ -984,7 +989,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                 *freshness = TaskFreshness::Dirty;
                 if state.active && !state.scheduled {
                     state.scheduled = true;
-                    turbo_tasks.schedule(task);
+                    turbo_tasks.schedule(task, "TODO");
                 }
             }
         }
@@ -993,15 +998,20 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                 *clean = Some(false);
                 if !state.scheduled {
                     state.scheduled = true;
-                    turbo_tasks.schedule(task);
+                    turbo_tasks.schedule(task, "TODO");
                 }
             }
         }
     }
 
-    fn invalidate_tasks(&self, tasks: Vec<TaskId>, turbo_tasks: &dyn TurboTasksBackendApi) {
+    fn invalidate_tasks(
+        &self,
+        tasks: Vec<TaskId>,
+        reason: &'static str,
+        turbo_tasks: &dyn TurboTasksBackendApi,
+    ) {
         for task in tasks {
-            self.invalidate_task(task, turbo_tasks);
+            self.invalidate_task(task, reason, turbo_tasks);
         }
     }
 
@@ -1149,7 +1159,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                         state.scheduled = true;
                         #[cfg(feature = "log_scheduled_tasks")]
                         println!("schedule({task}) in task_execution_completed");
-                        turbo_tasks.schedule(task);
+                        turbo_tasks.schedule(task, "TODO");
                     }
                 }
             }
@@ -1233,7 +1243,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                     "schedule({task}) in try_read_task_output[{:?}]",
                     mem_state.freshness
                 );
-                turbo_tasks.schedule(task);
+                turbo_tasks.schedule(task, "TODO");
             }
             #[cfg(feature = "log_running_tasks")]
             println!("waiting {} waits on {}: {:?}", reader, task, state);
@@ -1306,7 +1316,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                 *scheduled = true;
                 #[cfg(feature = "log_scheduled_tasks")]
                 println!("schedule({task}) in try_read_task_cell[NeverExecuted]");
-                turbo_tasks.schedule(task);
+                turbo_tasks.schedule(task, "TODO");
             }
             #[cfg(feature = "log_running_tasks")]
             println!("waiting (fresh task) {} waits on {}", reader, task);
@@ -1332,7 +1342,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                             *scheduled = true;
                             #[cfg(feature = "log_scheduled_tasks")]
                             println!("schedule({task}) in try_read_task_cell[NeedComputation]");
-                            turbo_tasks.schedule(task);
+                            turbo_tasks.schedule(task, "TODO");
                         }
                     }
                     #[cfg(feature = "log_running_tasks")]
@@ -1345,7 +1355,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                 *scheduled = true;
                 #[cfg(feature = "log_scheduled_tasks")]
                 println!("schedule({task}) in try_read_task_cell[Cell missing]");
-                turbo_tasks.schedule(task);
+                turbo_tasks.schedule(task, "TODO");
             }
             #[cfg(feature = "log_running_tasks")]
             println!("waiting (incomplete task) {} waits on {}", reader, task);
@@ -1383,7 +1393,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                         *scheduled = true;
                         #[cfg(feature = "log_scheduled_tasks")]
                         println!("schedule({task}) in try_read_task_cell_untracked");
-                        turbo_tasks.schedule(task);
+                        turbo_tasks.schedule(task, "TODO");
                     }
                 }
                 Ok(Err(mem_state.event.listen()))
@@ -1494,7 +1504,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                         state.scheduled = true;
                         #[cfg(feature = "log_scheduled_tasks")]
                         println!("schedule({task}) in update_task_cell");
-                        turbo_tasks.schedule(task);
+                        turbo_tasks.schedule(task, "TODO");
                     }
                 }
             }
@@ -1505,6 +1515,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
         &self,
         task_type: PersistentTaskType,
         parent_task: TaskId,
+        reason: &'static str,
         turbo_tasks: &dyn TurboTasksBackendApi,
     ) -> TaskId {
         if let Some(task) = self.cache.get(&task_type) {
@@ -1549,7 +1560,7 @@ impl<P: PersistedGraph> Backend for MemoryBackendWithPersistedGraph<P> {
                 self.only_known_to_memory_tasks.insert(task);
                 #[cfg(feature = "log_scheduled_tasks")]
                 println!("schedule({task}) in get_or_create_persistent_task");
-                turbo_tasks.schedule(task);
+                turbo_tasks.schedule(task, reason);
                 self.connect_already_counted(parent_task, task, turbo_tasks);
                 task
             }

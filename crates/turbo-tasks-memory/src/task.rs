@@ -17,8 +17,8 @@ use tokio::task_local;
 use turbo_tasks::{
     backend::PersistentTaskType,
     event::{Event, EventListener},
-    get_invalidator, registry, CellId, FunctionId, Invalidator, RawVc, TaskId, TaskInput,
-    TraitTypeId, TurboTasksBackendApi, ValueTypeId,
+    get_invalidator, registry, CellId, FunctionId, Invalidator, RawVc, SmallDuration, TaskId,
+    TaskInput, TraitTypeId, TurboTasksBackendApi, ValueTypeId,
 };
 pub type NativeTaskFuture = Pin<Box<dyn Future<Output = Result<RawVc>> + Send>>;
 pub type NativeTaskFn = Box<dyn Fn() -> NativeTaskFuture + Send + Sync>;
@@ -165,7 +165,7 @@ struct TaskState {
     // Stats:
     executions: u32,
     total_duration: Duration,
-    last_duration: Duration,
+    last_duration: SmallDuration,
 }
 
 impl TaskState {
@@ -577,7 +577,7 @@ impl Task {
         {
             let mut state = self.state.write();
             state.total_duration += duration;
-            state.last_duration = duration;
+            state.last_duration = duration.into();
             match state.state_type {
                 InProgress => {
                     state.state_type = Done;
@@ -623,7 +623,12 @@ impl Task {
         schedule_task
     }
 
-    fn make_dirty(&self, backend: &MemoryBackend, turbo_tasks: &dyn TurboTasksBackendApi) {
+    fn make_dirty(
+        &self,
+        reason: &'static str,
+        backend: &MemoryBackend,
+        turbo_tasks: &dyn TurboTasksBackendApi,
+    ) {
         if let TaskType::Once(_) = self.ty {
             // once task won't become dirty
             return;
@@ -653,7 +658,7 @@ impl Task {
                 if active {
                     state.state_type = Scheduled;
                     drop(state);
-                    turbo_tasks.schedule(self.id);
+                    turbo_tasks.schedule(self.id, reason);
                 } else {
                     state.state_type = Dirty;
                     drop(state);
@@ -665,12 +670,16 @@ impl Task {
         }
     }
 
-    pub(crate) fn schedule_when_dirty(&self, turbo_tasks: &dyn TurboTasksBackendApi) {
+    pub(crate) fn schedule_when_dirty(
+        &self,
+        reason: &'static str,
+        turbo_tasks: &dyn TurboTasksBackendApi,
+    ) {
         let mut state = self.state.write();
         if state.state_type == TaskStateType::Dirty {
             state.state_type = Scheduled;
             drop(state);
-            turbo_tasks.schedule(self.id);
+            turbo_tasks.schedule(self.id, reason);
         }
     }
 
@@ -679,6 +688,7 @@ impl Task {
         id: TaskScopeId,
         is_optimization_scope: bool,
         depth: usize,
+        reason: &'static str,
         backend: &MemoryBackend,
         turbo_tasks: &dyn TurboTasksBackendApi,
         queue: &mut VecDeque<(TaskId, usize)>,
@@ -705,7 +715,7 @@ impl Task {
                         turbo_tasks.schedule_notify_tasks_set(&notify);
                     }
                     if active {
-                        backend.increase_scope_active(root, turbo_tasks);
+                        backend.increase_scope_active(root, reason, turbo_tasks);
                     }
                     if parent {
                         backend.with_scope(root, |child| {
@@ -733,6 +743,7 @@ impl Task {
                                 id,
                                 is_optimization_scope,
                                 depth,
+                                reason,
                                 backend,
                                 turbo_tasks,
                                 queue,
@@ -749,7 +760,7 @@ impl Task {
                 drop(state);
 
                 if schedule_self {
-                    turbo_tasks.schedule(self.id);
+                    turbo_tasks.schedule(self.id, reason);
                 }
             }
         }
@@ -759,6 +770,7 @@ impl Task {
         &self,
         id: TaskScopeId,
         is_optimization_scope: bool,
+        reason: &'static str,
         backend: &MemoryBackend,
         turbo_tasks: &dyn TurboTasksBackendApi,
     ) {
@@ -767,12 +779,20 @@ impl Task {
             id,
             is_optimization_scope,
             0,
+            reason,
             backend,
             turbo_tasks,
             &mut queue,
         );
 
-        run_add_to_scope_queue(queue, id, is_optimization_scope, backend, turbo_tasks);
+        run_add_to_scope_queue(
+            queue,
+            id,
+            is_optimization_scope,
+            reason,
+            backend,
+            turbo_tasks,
+        );
     }
 
     fn add_self_to_new_scope(
@@ -1051,6 +1071,7 @@ impl Task {
                     backend.increase_scope_active_by(
                         root_scope,
                         active_counter as usize,
+                        "unknown",
                         turbo_tasks,
                     );
                 }
@@ -1083,7 +1104,13 @@ impl Task {
                 // Add children to new root scope
                 for child in children.iter() {
                     backend.with_task(*child, |child| {
-                        child.add_to_scope_internal(root_scope, true, backend, turbo_tasks);
+                        child.add_to_scope_internal(
+                            root_scope,
+                            true,
+                            "unkown",
+                            backend,
+                            turbo_tasks,
+                        );
                     })
                 }
 
@@ -1091,7 +1118,7 @@ impl Task {
                 // I think that will never happen since it should already be scheduled by the
                 // old scopes. Anyway let just do it to be safe:
                 if schedule_self {
-                    turbo_tasks.schedule(self.id);
+                    turbo_tasks.schedule(self.id, "unknown");
                 }
 
                 // Remove children from old scopes
@@ -1153,10 +1180,11 @@ impl Task {
     /// active it will be scheduled for execution.
     pub(crate) fn invalidate(
         &self,
+        reason: &'static str,
         backend: &MemoryBackend,
         turbo_tasks: &dyn TurboTasksBackendApi,
     ) {
-        self.make_dirty(backend, turbo_tasks)
+        self.make_dirty(reason, backend, turbo_tasks)
     }
 
     /// Access to the output cell.
@@ -1204,14 +1232,14 @@ impl Task {
         let mut state = self.state.write();
         state.executions = 0;
         state.total_duration = Duration::ZERO;
-        state.last_duration = Duration::ZERO;
+        state.last_duration = SmallDuration::ZERO;
     }
 
     pub fn get_stats_info(&self, backend: &MemoryBackend) -> TaskStatsInfo {
         let state = self.state.read();
         TaskStatsInfo {
             total_duration: state.total_duration,
-            last_duration: state.last_duration,
+            last_duration: state.last_duration.into(),
             executions: state.executions,
             root_scoped: matches!(state.scopes, TaskScopes::Root(_)),
             child_scopes: match state.scopes {
@@ -1302,6 +1330,7 @@ impl Task {
     pub(crate) fn connect_child(
         &self,
         child_id: TaskId,
+        reason: &'static str,
         backend: &MemoryBackend,
         turbo_tasks: &dyn TurboTasksBackendApi,
     ) {
@@ -1314,7 +1343,7 @@ impl Task {
                 for scope in scopes.iter() {
                     #[cfg(not(feature = "report_expensive"))]
                     {
-                        child.add_to_scope_internal(scope, false, backend, turbo_tasks);
+                        child.add_to_scope_internal(scope, false, reason, backend, turbo_tasks);
                     }
                     #[cfg(feature = "report_expensive")]
                     {
@@ -1323,7 +1352,7 @@ impl Task {
                         use turbo_tasks::util::FormatDuration;
 
                         let start = Instant::now();
-                        child.add_to_scope_internal(scope, false, backend, turbo_tasks);
+                        child.add_to_scope_internal(scope, false, reason, backend, turbo_tasks);
                         let elapsed = start.elapsed();
                         if elapsed.as_millis() >= 10 {
                             println!(
@@ -1509,6 +1538,7 @@ pub fn run_add_to_scope_queue(
     mut queue: VecDeque<(TaskId, usize)>,
     id: TaskScopeId,
     is_optimization_scope: bool,
+    reason: &'static str,
     backend: &MemoryBackend,
     turbo_tasks: &dyn TurboTasksBackendApi,
 ) {
@@ -1518,6 +1548,7 @@ pub fn run_add_to_scope_queue(
                 id,
                 is_optimization_scope,
                 depth,
+                reason,
                 backend,
                 turbo_tasks,
                 &mut queue,
@@ -1526,7 +1557,7 @@ pub fn run_add_to_scope_queue(
         if queue.len() > SPLIT_OFF_QUEUE_AT {
             let split_off_queue = queue.split_off(SPLIT_OFF_QUEUE_AT);
             turbo_tasks.schedule_backend_foreground_job(backend.create_backend_job(
-                Job::AddToScopeQueue(split_off_queue, id, is_optimization_scope),
+                Job::AddToScopeQueue(split_off_queue, id, is_optimization_scope, reason),
             ));
         }
     }

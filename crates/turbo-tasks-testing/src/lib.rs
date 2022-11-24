@@ -85,6 +85,7 @@ impl TurboTasksCallApi for VcStorage {
 
     fn run_once(
         &self,
+        _reason: &'static str,
         _future: std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>,
     ) -> TaskId {
         unreachable!()
@@ -92,6 +93,7 @@ impl TurboTasksCallApi for VcStorage {
 
     fn run_once_process(
         &self,
+        _reason: &'static str,
         _future: std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>,
     ) -> TaskId {
         unreachable!()
@@ -99,7 +101,7 @@ impl TurboTasksCallApi for VcStorage {
 }
 
 impl TurboTasksApi for VcStorage {
-    fn invalidate(&self, _task: TaskId) {
+    fn invalidate(&self, _task: TaskId, _reason: &'static str) {
         unreachable!()
     }
 
