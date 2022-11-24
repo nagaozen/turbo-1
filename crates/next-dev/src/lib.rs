@@ -354,7 +354,9 @@ pub async fn start_server(options: &DevServerOptions) -> Result<()> {
     let start = Instant::now();
 
     #[cfg(feature = "tokio_console")]
-    console_subscriber::init();
+    console_subscriber::ConsoleLayer::builder()
+        .retention(Duration::from_secs(1))
+        .init();
     register();
 
     let dir = options
