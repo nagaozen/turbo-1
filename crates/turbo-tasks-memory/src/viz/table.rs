@@ -28,8 +28,9 @@ pub fn create_table(root: GroupTree) -> String {
     let mut out = String::new();
     out += r#"<table class="sortable"><thead><tr>"#;
     out += r#"<th>function</th>"#;
-    out += r#"<th>initial executions</th>"#;
+    out += r#"<th>count</th>"#;
     out += r#"<th>active</th>"#;
+    out += r#"<th>dropped</th>"#;
     out += r#"<th>reexecutions</th>"#;
     out += r#"<th>total duration</th>"#;
     out += r#"<th>total current duration</th>"#;
@@ -54,24 +55,35 @@ pub fn create_table(root: GroupTree) -> String {
     ) -> Result<(), std::fmt::Error> {
         *out += r#"<tr>"#;
         let name = ty.to_string();
+        // name
         write!(
             out,
             "<td bgcolor=\"{}\">{}</td>",
             as_hash_color(&name),
             escape_html(&name)
         )?;
+        // count
         write!(
             out,
             "<td bgcolor=\"{}\">{}</td>",
             as_frac_color(stats.count, max_values.count),
             stats.count
         )?;
+        // active
         write!(
             out,
             "<td bgcolor=\"{}\">{}</td>",
             as_frac_color(stats.active_count, max_values.active_count),
             stats.active_count
         )?;
+        // dropped
+        write!(
+            out,
+            "<td bgcolor=\"{}\">{}</td>",
+            as_frac_color(stats.dropped_count, max_values.dropped_count),
+            stats.dropped_count
+        )?;
+        // reexecutions
         write!(
             out,
             "<td bgcolor=\"{}\">{}</td>",
@@ -81,6 +93,7 @@ pub fn create_table(root: GroupTree) -> String {
             ),
             stats.executions.saturating_sub(stats.count)
         )?;
+        // total duration
         write!(
             out,
             "<td bgcolor=\"{}\" data-sort=\"{}\">{}</td>",
@@ -91,6 +104,7 @@ pub fn create_table(root: GroupTree) -> String {
             stats.total_duration.as_micros(),
             FormatDuration(stats.total_duration)
         )?;
+        // total current duration
         write!(
             out,
             "<td bgcolor=\"{}\" data-sort=\"{}\">{}</td>",
@@ -101,6 +115,7 @@ pub fn create_table(root: GroupTree) -> String {
             stats.total_current_duration.as_micros(),
             FormatDuration(stats.total_current_duration)
         )?;
+        // total update duration
         write!(
             out,
             "<td bgcolor=\"{}\" data-sort=\"{}\">{}</td>",
@@ -111,16 +126,23 @@ pub fn create_table(root: GroupTree) -> String {
             stats.total_update_duration.as_micros(),
             FormatDuration(stats.total_update_duration)
         )?;
+        // avg duration
+        let avg_duration = if stats.executions == 0 {
+            Duration::ZERO
+        } else {
+            stats.total_duration / (stats.executions as u32)
+        };
         write!(
             out,
             "<td bgcolor=\"{}\" data-sort=\"{}\">{}</td>",
             as_frac_color(
-                stats.total_duration.as_micros() / (stats.executions as u128),
+                avg_duration.as_micros(),
                 max_values.avg_duration.as_micros()
             ),
-            (stats.total_duration / (stats.executions as u32)).as_micros(),
-            FormatDuration(stats.total_duration / (stats.executions as u32))
+            avg_duration.as_micros(),
+            FormatDuration(avg_duration)
         )?;
+        // max duration
         write!(
             out,
             "<td bgcolor=\"{}\" data-sort=\"{}\">{}</td>",
@@ -131,12 +153,14 @@ pub fn create_table(root: GroupTree) -> String {
             stats.max_duration.as_micros(),
             FormatDuration(stats.max_duration)
         )?;
+        // root scopes
         write!(
             out,
             "<td bgcolor=\"{}\">{}</td>",
             as_frac_color(stats.roots, max_values.roots),
             stats.roots
         )?;
+        // avg scopes
         let max_scopes = max_values.scopes.saturating_sub(100);
         write!(
             out,
@@ -147,6 +171,7 @@ pub fn create_table(root: GroupTree) -> String {
             ),
             (100 * stats.scopes / stats.count) as f32 / 100.0
         )?;
+        // avg dependencies
         let dependencies = get_avg_dependencies_count_times_100(stats);
         write!(
             out,
@@ -154,12 +179,14 @@ pub fn create_table(root: GroupTree) -> String {
             as_frac_color(dependencies, max_values.dependencies),
             (dependencies as f32) / 100.0
         )?;
+        // depth
         write!(
             out,
             "<td bgcolor=\"{}\">{}</td>",
             as_frac_color(depth, max_values.depth),
             depth
         )?;
+        // common parent
         if let Some((ty, _)) = parent {
             let name = ty.to_string();
             write!(

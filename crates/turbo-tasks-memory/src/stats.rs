@@ -60,6 +60,7 @@ pub enum ReferenceType {
 pub struct TaskStats {
     pub count: usize,
     pub active_count: usize,
+    pub dropped_count: usize,
     pub executions: usize,
     pub roots: usize,
     pub scopes: usize,
@@ -75,6 +76,7 @@ impl Default for TaskStats {
         Self {
             count: 0,
             active_count: 0,
+            dropped_count: 0,
             executions: 0,
             roots: 0,
             scopes: 0,
@@ -105,7 +107,7 @@ impl Stats {
     }
 
     pub fn add(&mut self, backend: &MemoryBackend, task: &Task) {
-        self.add_conditional(backend, task, |_, info| info.executions > 0)
+        self.add_conditional(backend, task, |_, _| true)
     }
 
     pub fn add_conditional(
@@ -131,6 +133,9 @@ impl Stats {
         stats.count += 1;
         if active {
             stats.active_count += 1
+        }
+        if executions == 0 {
+            stats.dropped_count += 1
         }
         stats.total_duration += total_duration;
         stats.total_current_duration += last_duration;
