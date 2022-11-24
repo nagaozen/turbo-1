@@ -1,14 +1,10 @@
 use std::{
-    borrow::Cow,
-    cell::RefCell,
-    collections::{HashSet, VecDeque},
-    future::Future,
-    hash::BuildHasherDefault,
-    pin::Pin,
-    time::Duration,
+    borrow::Cow, cell::RefCell, collections::VecDeque, future::Future, hash::BuildHasherDefault,
+    pin::Pin, time::Duration,
 };
 
 use anyhow::{bail, Result};
+use auto_hash_map::AutoSet;
 use dashmap::{mapref::entry::Entry, DashMap};
 use rustc_hash::FxHasher;
 use tokio::task::futures::TaskLocalFuture;
@@ -218,7 +214,7 @@ impl Backend for MemoryBackend {
     }
 
     type ExecutionScopeFuture<T: Future<Output = Result<()>> + Send + 'static> =
-        TaskLocalFuture<RefCell<HashSet<TaskDependency>>, T>;
+        TaskLocalFuture<RefCell<AutoSet<TaskDependency>>, T>;
     fn execution_scope<T: Future<Output = Result<()>> + Send + 'static>(
         &self,
         _task: TaskId,
@@ -369,7 +365,7 @@ impl Backend for MemoryBackend {
         trait_id: TraitTypeId,
         reader: TaskId,
         turbo_tasks: &dyn TurboTasksBackendApi,
-    ) -> Result<Result<HashSet<RawVc>, EventListener>> {
+    ) -> Result<Result<AutoSet<RawVc>, EventListener>> {
         self.with_task(id, |task| {
             task.try_read_task_collectibles(reader, trait_id, self, turbo_tasks)
         })
@@ -512,8 +508,8 @@ impl Backend for MemoryBackend {
 }
 
 pub(crate) enum Job {
-    RemoveFromScopes(HashSet<TaskId>, Vec<TaskScopeId>),
-    RemoveFromScope(HashSet<TaskId>, TaskScopeId),
+    RemoveFromScopes(AutoSet<TaskId>, Vec<TaskScopeId>),
+    RemoveFromScope(AutoSet<TaskId>, TaskScopeId),
     ScheduleWhenDirty(Vec<TaskId>, &'static str),
     /// Add tasks from a scope. Scheduled by `run_add_from_scope_queue` to
     /// split off work.

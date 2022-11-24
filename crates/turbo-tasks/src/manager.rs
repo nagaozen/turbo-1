@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     future::Future,
     hash::Hash,
     panic::AssertUnwindSafe,
@@ -15,6 +15,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
+use auto_hash_map::AutoSet;
 use concurrent_queue::ConcurrentQueue;
 use futures::FutureExt;
 use indexmap::IndexMap;
@@ -96,11 +97,11 @@ pub trait TurboTasksApi: TurboTasksCallApi + Sync + Send {
         &self,
         task: TaskId,
         trait_id: TraitTypeId,
-    ) -> Result<Result<HashSet<RawVc>, EventListener>>;
+    ) -> Result<Result<AutoSet<RawVc>, EventListener>>;
 
     fn emit_collectible(&self, trait_type: TraitTypeId, collectible: RawVc);
     fn unemit_collectible(&self, trait_type: TraitTypeId, collectible: RawVc);
-    fn unemit_collectibles(&self, trait_type: TraitTypeId, collectibles: &HashSet<RawVc>);
+    fn unemit_collectibles(&self, trait_type: TraitTypeId, collectibles: &AutoSet<RawVc>);
 
     /// INVALIDATION: Be careful with this, it will not track dependencies, so
     /// using it could break cache invalidation.
@@ -147,7 +148,7 @@ pub trait TurboTasksBackendApi: TaskIdProvider + TurboTasksCallApi + Sync + Send
 
     /// Enqueues tasks for notification of changed dependencies. This will
     /// eventually call `invalidate_tasks()` on all tasks.
-    fn schedule_notify_tasks_set(&self, tasks: &HashSet<TaskId>);
+    fn schedule_notify_tasks_set(&self, tasks: &AutoSet<TaskId>);
 }
 
 impl TaskIdProvider for &dyn TurboTasksBackendApi {
@@ -746,7 +747,7 @@ impl<B: Backend> TurboTasksApi for TurboTasks<B> {
         &self,
         task: TaskId,
         trait_id: TraitTypeId,
-    ) -> Result<Result<HashSet<RawVc>, EventListener>> {
+    ) -> Result<Result<AutoSet<RawVc>, EventListener>> {
         self.backend.try_read_task_collectibles(
             task,
             trait_id,
@@ -773,7 +774,7 @@ impl<B: Backend> TurboTasksApi for TurboTasks<B> {
         );
     }
 
-    fn unemit_collectibles(&self, trait_type: TraitTypeId, collectibles: &HashSet<RawVc>) {
+    fn unemit_collectibles(&self, trait_type: TraitTypeId, collectibles: &AutoSet<RawVc>) {
         for collectible in collectibles {
             self.backend.unemit_collectible(
                 trait_type,
@@ -855,7 +856,7 @@ impl<B: Backend> TurboTasksBackendApi for TurboTasks<B> {
 
     /// Enqueues tasks for notification of changed dependencies. This will
     /// eventually call `dependent_cell_updated()` on all tasks.
-    fn schedule_notify_tasks_set(&self, tasks: &HashSet<TaskId>) {
+    fn schedule_notify_tasks_set(&self, tasks: &AutoSet<TaskId>) {
         let result = CURRENT_TASK_INFO.try_with(|info| {
             if let Some(ref cell) = info.tasks_to_notify {
                 let mut list = cell.borrow_mut();
@@ -1154,7 +1155,7 @@ pub(crate) async fn read_task_collectibles(
     this: &dyn TurboTasksApi,
     id: TaskId,
     trait_id: TraitTypeId,
-) -> Result<HashSet<RawVc>> {
+) -> Result<AutoSet<RawVc>> {
     loop {
         match this.try_read_task_collectibles(id, trait_id)? {
             Ok(result) => return Ok(result),
