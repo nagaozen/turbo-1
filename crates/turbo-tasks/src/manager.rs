@@ -260,6 +260,7 @@ impl<B: Backend> TurboTasks<B> {
     // TODO make sure that all dependencies settle before reading them
     /// Creates a new root task, that is only executed once.
     /// Dependencies will not invalidate the task.
+    #[track_caller]
     pub fn spawn_once_task(
         &self,
         reason: &'static str,
@@ -336,6 +337,7 @@ impl<B: Backend> TurboTasks<B> {
         ))
     }
 
+    #[track_caller]
     pub(crate) fn schedule(&self, task_id: TaskId, reason: &'static str) {
         self.begin_primary_job();
         self.scheduled_tasks.fetch_add(1, Ordering::AcqRel);
@@ -404,7 +406,10 @@ impl<B: Backend> TurboTasks<B> {
         );
 
         #[cfg(feature = "tokio_tracing")]
-        tokio::task::Builder::new().name(&description).spawn(future);
+        tokio::task::Builder::new()
+            .name(&description)
+            .spawn(future)
+            .unwrap();
         #[cfg(not(feature = "tokio_tracing"))]
         tokio::task::spawn(future);
     }
@@ -502,7 +507,9 @@ impl<B: Backend> TurboTasks<B> {
         &self,
         aggregation: Duration,
     ) -> (Duration, usize, IndexMap<&'static str, (Duration, usize)>) {
-        let listener = self.event.listen();
+        let listener = self
+            .event
+            .listen_with_note(|| "wait for update info".to_string());
         if aggregation.is_zero() {
             if let Some(info) = self.aggregated_update.lock().unwrap().take() {
                 return info;
@@ -559,6 +566,7 @@ impl<B: Backend> TurboTasks<B> {
         self.backend.stop(self);
     }
 
+    #[track_caller]
     pub(crate) fn schedule_background_job<
         T: FnOnce(Arc<TurboTasks<B>>) -> F + Send + 'static,
         F: Future<Output = ()> + Send + 'static,
@@ -590,6 +598,7 @@ impl<B: Backend> TurboTasks<B> {
         }));
     }
 
+    #[track_caller]
     pub(crate) fn schedule_foreground_job<
         T: FnOnce(Arc<TurboTasks<B>>) -> F + Send + 'static,
         F: Future<Output = ()> + Send + 'static,
@@ -640,6 +649,7 @@ impl<B: Backend> TurboTasksCallApi for TurboTasks<B> {
         self.trait_call(trait_type, trait_fn_name, inputs)
     }
 
+    #[track_caller]
     fn run_once(
         &self,
         reason: &'static str,
@@ -651,6 +661,7 @@ impl<B: Backend> TurboTasksCallApi for TurboTasks<B> {
         })
     }
 
+    #[track_caller]
     fn run_once_process(
         &self,
         reason: &'static str,
@@ -792,11 +803,13 @@ impl<B: Backend> TurboTasksBackendApi for TurboTasks<B> {
     fn pin(&self) -> Arc<dyn TurboTasksBackendApi> {
         self.pin()
     }
+    #[track_caller]
     fn schedule_backend_background_job(&self, id: BackendJobId) {
         self.schedule_background_job(move |this| async move {
             this.backend.run_backend_job(id, &*this).await;
         })
     }
+    #[track_caller]
     fn schedule_backend_foreground_job(&self, id: BackendJobId) {
         self.schedule_foreground_job(move |this| async move {
             this.backend.run_backend_job(id, &*this).await;
@@ -858,6 +871,7 @@ impl<B: Backend> TurboTasksBackendApi for TurboTasks<B> {
         }
     }
 
+    #[track_caller]
     fn schedule(&self, task: TaskId, reason: &'static str) {
         self.schedule(task, reason)
     }

@@ -1414,6 +1414,7 @@ impl Task {
         &self,
         strongly_consistent: bool,
         func: F,
+        note: impl Fn() -> String + Sync + Send + 'static,
         backend: &MemoryBackend,
         turbo_tasks: &dyn TurboTasksBackendApi,
     ) -> Result<Result<T, EventListener>> {
@@ -1450,7 +1451,7 @@ impl Task {
             | Scheduled { ref event }
             | InProgress { ref event }
             | InProgressDirty { ref event } => {
-                let listener = event.listen();
+                let listener = event.listen_with_note(note);
                 drop(state);
                 Ok(Err(listener))
             }
