@@ -85,8 +85,8 @@ function onBuildOk() {
   Bus.emit({ type: Bus.TYPE_BUILD_OK });
 }
 
-function onTurbopackError(issue: Issue) {
-  Bus.emit({ type: Bus.TYPE_TURBOPACK_ERROR, issue });
+function onTurbopackError(issues: Issue[]) {
+  Bus.emit({ type: Bus.TYPE_TURBOPACK_ERROR, issues });
 }
 
 function onBeforeRefresh() {

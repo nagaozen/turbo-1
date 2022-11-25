@@ -12,7 +12,7 @@ export const TYPE_UNHANDLED_REJECTION = "unhandled-rejection";
 export type BuildOk = { type: typeof TYPE_BUILD_OK };
 export type TurbopackError = {
   type: typeof TYPE_TURBOPACK_ERROR;
-  issue: Issue;
+  issues: Issue[];
 };
 export type BeforeFastRefresh = { type: typeof TYPE_BEFORE_REFRESH };
 export type FastRefresh = { type: typeof TYPE_REFRESH };

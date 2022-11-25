@@ -198,21 +198,20 @@ function compareByList(list: any[], a: any, b: any) {
 }
 
 function handleIssues(msg: ServerMessage): boolean {
-  let issueToReport = null;
+  let hasCriticalIssues = false;
 
   for (const issue of msg.issues) {
     if (CRITICAL.includes(issue.severity)) {
-      issueToReport = issue;
-      break;
+      console.error(stripAnsi(issue.formatted));
+      hasCriticalIssues = true;
     }
   }
 
-  if (issueToReport) {
-    console.error(stripAnsi(issueToReport.formatted));
-    onTurbopackError(issueToReport);
+  if (msg.issues.length > 0) {
+    onTurbopackError(msg.issues);
   }
 
-  return issueToReport != null;
+  return hasCriticalIssues;
 }
 
 const SEVERITY_ORDER = ["bug", "fatal", "error", "warning", "info", "log"];
