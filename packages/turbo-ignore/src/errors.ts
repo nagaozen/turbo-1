@@ -11,9 +11,13 @@ export const NON_FATAL_ERRORS: NonFatalErrors = {
       /run failed: We did not detect an in-use package manager for your project/,
     message: `turbo-ignore could not complete - no package manager detected, please commit a lockfile, or set "packageManager" in your root "package.json"`,
   },
-  FIRST_COMMIT: {
+  UNREACHABLE_PARENT: {
     regex: /failed to resolve packages to run: commit HEAD\^ does not exist/,
     message: `turbo-ignore could not complete - parent commit does not exist or is unreachable`,
+  },
+  UNREACHABLE_COMMIT: {
+    regex: /commit \S+ does not exist/,
+    message: `turbo-ignore could not complete - previously deployed commit does not exist or is unreachable`,
   },
 };
 

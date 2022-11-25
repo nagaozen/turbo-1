@@ -1,7 +1,8 @@
 import { getComparison } from "../src/getComparison";
-import { spyConsole, validateLogs } from "./test-utils";
+import { spyConsole, validateLogs, mockEnv } from "./test-utils";
 
 describe("getComparison()", () => {
+  mockEnv();
   const mockConsole = spyConsole();
   it("uses headRelative comparison when not running Vercel CI", async () => {
     expect(getComparison({ workspace: "test-workspace" }))

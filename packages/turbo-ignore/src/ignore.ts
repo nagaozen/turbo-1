@@ -6,6 +6,7 @@ import { getWorkspace } from "./getWorkspace";
 import { info, warn, error } from "./logger";
 import { shouldWarn } from "./errors";
 import { TurboIgnoreArgs } from "./types";
+import { checkCommit } from "./checkCommit";
 
 function ignoreBuild() {
   info(`ignoring the change`);
@@ -44,6 +45,20 @@ export default function turboIgnore({ args }: { args: TurboIgnoreArgs }) {
   const workspace = getWorkspace(args);
   if (!workspace) {
     return continueBuild();
+  }
+
+  // check the commit message
+  const parsedCommit = checkCommit({ workspace });
+  if (parsedCommit.result === "skip") {
+    info(parsedCommit.reason);
+    return ignoreBuild();
+  }
+  if (parsedCommit.result === "deploy") {
+    info(parsedCommit.reason);
+    return continueBuild();
+  }
+  if (parsedCommit.result === "conflict") {
+    info(parsedCommit.reason);
   }
 
   // Get the start of the comparison (previous deployment when available, or previous commit by default)

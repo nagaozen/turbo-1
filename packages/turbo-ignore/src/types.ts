@@ -1,7 +1,8 @@
 export type NonFatalErrorKeys =
   | "MISSING_LOCKFILE"
   | "NO_PACKAGE_MANAGER"
-  | "FIRST_COMMIT";
+  | "UNREACHABLE_PARENT"
+  | "UNREACHABLE_COMMIT";
 
 export interface NonFatalError {
   regex: RegExp;

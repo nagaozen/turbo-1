@@ -1,5 +1,11 @@
 import pkg from "../package.json";
 import { TurboIgnoreArgs } from "./types";
+import {
+  skipAllCommits,
+  forceAllCommits,
+  skipWorkspaceCommits,
+  forceWorkspaceCommits,
+} from "./checkCommit";
 
 export const help = `
 turbo-ignore
@@ -18,6 +24,20 @@ Flags:
                       disable [default: HEAD^]
   --help, -h          Show this help message
   --version, -v       Show the version of this script
+
+---
+
+turbo-ignore will also check for special commit messages to indicate if a build should be skipped or not.
+
+Skip turbo-ignore check and automatically ignore:
+${[...skipAllCommits, ...skipWorkspaceCommits({ workspace: "<workspace>" })]
+  .map((msg) => `  - ${msg}`)
+  .join("\n")}
+
+Skip turbo-ignore check and automatically deploy:
+${[...forceAllCommits, ...forceWorkspaceCommits({ workspace: "<workspace>" })]
+  .map((msg) => `  - ${msg}`)
+  .join("\n")}
 `;
 
 // simple args parser because we don't want to pull in a dependency
